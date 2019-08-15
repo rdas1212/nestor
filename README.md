@@ -1,2 +1,2 @@
-# nestor
+# Nestor
  Trello automation
