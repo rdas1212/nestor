@@ -2,7 +2,9 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, NoReturn
+
+import requests
 
 LOG = logging.getLogger('nestor')
 
@@ -26,8 +28,8 @@ class TrelloLabel(object):
 class TrelloBoard(object):
     name: str
     id: str
-    lists: List[TrelloList]
-    labels: List[TrelloLabel]
+    lists: Optional[List[TrelloList]]
+    labels: Optional[List[TrelloLabel]]
 
 
 class RequiredResourceMissingException(Exception):
@@ -35,6 +37,7 @@ class RequiredResourceMissingException(Exception):
 
 
 class Trello(object):
+    API_URL = 'https://api.trello.com'
 
     def __init__(self, api_key: str, api_token: str):
         """ Initializer
@@ -59,7 +62,6 @@ class Trello(object):
         :param checklist: Optional checklist, a new checklist is created always
         :param place_at_top: Optional flag to place the card on top of the list instead of the bottom
         """
-        # TODO
         # get the board
         target_board = self._get_board(board_name)
         if not target_board:
@@ -69,11 +71,11 @@ class Trello(object):
         target_list = self._get_list(target_board, list_name)
         LOG.info('List exists')
         # create the card with due-date, description & position
-        card_id = self._create_card(target_board, target_list, card_name, description, due, place_at_top)
+        card_id = self._create_card(target_list, card_name, description, due, place_at_top)
         LOG.info('Base card created')
         if labels_names:
             # get the valid labels
-            labels_to_add = self._get_valid_labels(target_board, labels_names)
+            labels_to_add = self._get_valid_label_ids(target_board, labels_names)
             # add the valid labels
             self._add_labels(card_id, labels_to_add)
             LOG.info('Labels added to card')
@@ -114,24 +116,88 @@ class Trello(object):
         LOG.info('List was created: %s', created_list)
         return created_list
 
-    def _create_card(self, target_board: TrelloBoard, target_list: TrelloList, card_name: str,
+    def _create_card(self, target_list: TrelloList, card_name: str,
                      description: Optional[str], due: Optional[datetime], place_at_top: Optional[bool]) -> str:
-        pass
+        card_params = {
+            'name': card_name,
+            'idList': target_list.id
+        }
+        if description:
+            card_params['desc'] = description
+        if due:
+            card_params['due'] = due.isoformat()[:-3] + 'Z'
+        if place_at_top:
+            card_params['pos'] = 'top'
+
+        api_params = {**self.__auth_params(), **card_params}
+        api_url = Trello.API_URL + '/1/cards'
+        LOG.debug('Making API call')
+        response = requests.post(api_url, params=api_params)
+        response.raise_for_status()
+        return response.json()['id']
 
     def _create_list(self, target_board: TrelloBoard, list_name: str) -> TrelloList:
-        pass
+        LOG.debug('Creating list by name %s', list_name)
+        api_params = {
+            'name': list_name,
+            'idBoard': target_board.id,
+            **self.__auth_params()
+        }
+        api_url = Trello.API_URL + '/1/lists'
+        response = requests.post(api_url, params=api_params)
+        response.raise_for_status()
+        created_list = TrelloList(
+            response.json()['name'],
+            response.json()['id']
+        )
+        target_board.lists.append(created_list)
+        return created_list
 
     def _cache_all_boards(self) -> None:
-        pass
+        LOG.debug('Refreshing cache')
+        boards = self._discover_all_boards()
+        for board in boards:
+            lists = self._discover_lists_in_board(board.id)
+            labels = self._discover_labels_in_board(board.id)
+            board.lists = lists
+            board.labels = labels
+        self._boards = boards
 
-    def _get_valid_labels(self, target_board: TrelloBoard, label_names: List[str]) -> List[str]:
-        pass
+    def _get_valid_label_ids(self, target_board: TrelloBoard, label_names: List[str]) -> List[str]:  # noqa
+        return [
+            label.id for label in target_board.labels if label.name in label_names
+        ]
 
-    def _add_labels(self, card_id: str, label_ids: List[str]) -> None:
-        pass
+    def _add_labels(self, card_id: str, label_ids: List[str]) -> NoReturn:
+        LOG.debug('Adding %d labels to card', len(label_ids))
+        for label_id in label_ids:
+            api_params = {
+                'value': label_id,
+                **self.__auth_params()
+            }
+            api_url = Trello.API_URL + f'/1/cards/{card_id}/idLabels'
+            response = requests.post(api_url, params=api_params)
+            response.raise_for_status()
 
-    def _create_checklist(self, card_id: str, checklist_name: str, items: List[str]) -> None:
-        pass
+    def _create_checklist(self, card_id: str, checklist_name: str, items: List[str]) -> NoReturn:
+        LOG.debug('Adding checklist %s with %d items to card', checklist_name, len(items))
+        create_api_params = {
+            'idCard': card_id,
+            'name': checklist_name,
+            **self.__auth_params()
+        }
+        create_api_url = Trello.API_URL + '/1/checklists'
+        response = requests.post(create_api_url, params=create_api_params)
+        response.raise_for_status()
+        checklist_id = response.json()['id']
+        for item in items:
+            add_api_params = {
+                'name': item,
+                **self.__auth_params()
+            }
+            add_api_url = Trello.API_URL + f'/1/checklists/{checklist_id}/checkItems'
+            response = requests.post(add_api_url, params=add_api_params)
+            response.raise_for_status()
 
     def __auth_params(self) -> Dict[str, str]:
         return {
@@ -155,3 +221,38 @@ class Trello(object):
 
     def __cache_is_valid(self):
         return self._boards and time.time() - self._cache_time <= CACHE_VALIDITY
+
+    def _discover_all_boards(self) -> List[TrelloBoard]:
+        api_params = {
+            'fields': 'name',
+            **self.__auth_params()
+        }
+        api_url = Trello.API_URL + '/1/members/me/boards'
+        response = requests.get(api_url, params=api_params)
+        response.raise_for_status()
+        return [
+            TrelloBoard(e['name'], e['id'], None, None) for e in response.json()
+        ]
+
+    def _discover_lists_in_board(self, board_id) -> List[TrelloList]:
+        api_params = {
+            'fields': 'name',
+            **self.__auth_params()
+        }
+        api_url = Trello.API_URL + f'/1/boards/{board_id}/lists'
+        response = requests.get(api_url, params=api_params)
+        response.raise_for_status()
+        return [
+            TrelloList(e['name'], e['id']) for e in response.json()
+        ]
+
+    def _discover_labels_in_board(self, board_id) -> List[TrelloLabel]:
+        api_params = {
+            **self.__auth_params()
+        }
+        api_url = Trello.API_URL + f'/1/boards/{board_id}/labels'
+        response = requests.get(api_url, params=api_params)
+        response.raise_for_status()
+        return [
+            TrelloLabel(e['name'], e['id'], e['color']) for e in response.json()
+        ]
