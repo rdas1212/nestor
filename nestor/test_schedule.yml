@@ -1,0 +1,20 @@
+rules:
+  - trigger:
+      schedule: "0 0 1 * *"
+    actions:
+      - do: "add_card"
+        with:
+          board: "Daily Life"
+          list: "Tasks"
+          name: "Pay bills"
+          labels:
+            - "monthly"
+            - "bills"
+          checklist:
+            name: "Bills"
+            items:
+              - "Credit card"
+              - "Electricity"
+          due: "now() + timedelta(days=15)"
+          description: "Pay your damn bills!"
+          place_at_top: no
