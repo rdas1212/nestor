@@ -9,6 +9,8 @@ verify_ssl = true
 requests = '*'
 schedule = '*'
 PyYAML = '*'
+click = '*'
+croniter = '*'
 
 [requires]
 python_version = "3.7"

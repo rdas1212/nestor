@@ -1,6 +1,6 @@
 rules:
   - trigger:
-      schedule: "0 0 1 * *"
+      schedule: "0 0 * * mon"
     actions:
       - do: "add_card"
         with:
@@ -18,3 +18,13 @@ rules:
           due: "now() + timedelta(days=15)"
           description: "Pay your damn bills!"
           place_at_top: no
+  - trigger:
+      schedule: "0 0 * * mon,fri"
+    actions:
+      - do: "add_card"
+        with:
+          board: "Daily Life"
+          list: "Tasks"
+          name: "Pay respect"
+          due: "now() + timedelta(days=7)"
+          description: "Press F"

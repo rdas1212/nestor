@@ -43,6 +43,10 @@ class Trigger(object):
     def type(self):
         return self._type
 
+    @property
+    def cron_expr(self):
+        return self._cron_expr
+
 
 class Action(object):
     def __init__(self, definition: Dict[str, Any], trello: Trello):
